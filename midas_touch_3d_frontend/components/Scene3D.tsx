@@ -119,6 +119,11 @@ const GazeController = () => {
     // Bắn tia Raycaster để tìm vật thể 3D bị nhìn trúng
     const intersects = raycaster.intersectObjects(scene.children, true);
     
+    // Tự động log giao cắt Raycaster (Throttled để tránh lag console)
+    if (Math.random() < 0.015) { // Log khoảng ~1 lần mỗi giây ở tốc độ 60FPS
+       console.log("[DEBUG 3] Raycaster 3D Hits:", intersects.length > 0 ? intersects.map(i => i.object.name).filter(Boolean) : "Trượt (Nhìn ra ngoài)");
+    }
+
     // Tìm vật thể đầu tiên có userData.isTarget
     const hit = intersects.find((intersect) => intersect.object.userData?.isTarget);
     

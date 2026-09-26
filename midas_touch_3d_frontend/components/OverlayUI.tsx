@@ -5,7 +5,7 @@ import { useGazeStore } from '../store/useGazeStore';
 import { Activity, ShieldCheck, ShieldAlert, Cpu, Eye, Zap } from 'lucide-react';
 
 export const OverlayUI: React.FC = () => {
-  const { x, y, velocity, label, labelName, isConnected, graspedTargetId, targets, resetAllTargets, isWebcamMode, setWebcamMode, screenGaze } = useGazeStore();
+  const { x, y, velocity, label, labelName, isConnected, graspedTargetId, targets, resetAllTargets, isWebcamMode, setWebcamMode, screenGaze, isGazeCloudLoaded } = useGazeStore();
 
   const getLabelBadge = () => {
     switch (label) {
@@ -57,13 +57,16 @@ export const OverlayUI: React.FC = () => {
             <span className="text-slate-400">Eye Tracking:</span>
             <button 
               onClick={() => setWebcamMode(!isWebcamMode)}
+              disabled={!isGazeCloudLoaded && !isWebcamMode}
               className={`px-2 py-1 rounded transition-colors pointer-events-auto ${
-                isWebcamMode 
-                  ? 'bg-emerald-500 hover:bg-emerald-400 text-white' 
-                  : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
+                !isGazeCloudLoaded && !isWebcamMode
+                  ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                  : isWebcamMode 
+                    ? 'bg-emerald-500 hover:bg-emerald-400 text-white' 
+                    : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
               }`}
             >
-              {isWebcamMode ? 'Webcam (Bật)' : 'Chuột (Giữa màn hình)'}
+              {!isGazeCloudLoaded && !isWebcamMode ? 'Đang tải AI...' : (isWebcamMode ? 'Webcam (Bật)' : 'Chuột (Giữa màn hình)')}
             </button>
           </div>
         </div>

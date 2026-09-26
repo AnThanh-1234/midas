@@ -31,11 +31,18 @@ export const WebGazerManager = () => {
          window.webgazer.clearData();
       }
 
+      let logTick = 0;
       await window.webgazer
         .setGazeListener((data: any, elapsedTime: number) => {
           if (data == null || !useGazeStore.getState().isWebcamMode) return;
           const ndcX = (data.x / window.innerWidth) * 2 - 1;
           const ndcY = -(data.y / window.innerHeight) * 2 + 1;
+          
+          if (logTick++ % 30 === 0) {
+            console.log("[DEBUG 1] Raw WebGazer (X, Y):", Math.round(data.x), Math.round(data.y));
+            console.log("[DEBUG 2] Zustand State (NDC X, Y):", ndcX.toFixed(3), ndcY.toFixed(3));
+          }
+          
           useGazeStore.getState().setScreenGaze(ndcX, ndcY);
         })
         .begin(); 

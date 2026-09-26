@@ -26,7 +26,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <head>
-        <Script src="https://webgazer.cs.brown.edu/webgazer.js" strategy="beforeInteractive" />
+        <Script src="https://api.gazecloud.com/gazecloudapi.js" strategy="beforeInteractive" />
       </head>
       <body className="min-h-full flex flex-col">
         {children}

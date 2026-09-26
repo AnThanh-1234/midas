@@ -23,12 +23,14 @@ export interface GazeState {
   activeHoverTargetId: string | null;
   graspedTargetId: string | null;
   isCalibrated: boolean;
+  isGazeCloudLoaded: boolean;
   robotPosition: [number, number, number]; // target position for robot arm
   
   setGazeData: (x: number, y: number, velocity: number, label: number, labelName: string) => void;
   setConnected: (connected: boolean) => void;
   setWebcamMode: (mode: boolean) => void;
   setCalibrated: (calibrated: boolean) => void;
+  setGazeCloudLoaded: (loaded: boolean) => void;
   setScreenGaze: (x: number, y: number) => void;
   setHoverTarget: (id: string | null) => void;
   updateTargetGraspProgress: (id: string, progress: number, isGrasped: boolean) => void;
@@ -44,6 +46,7 @@ export const useGazeStore = create<GazeState>((set) => ({
   isConnected: false,
   isWebcamMode: false,
   isCalibrated: false,
+  isGazeCloudLoaded: false,
   screenGaze: { x: 0, y: 0 },
   robotPosition: [2, 2.5, -3], // default rest position
   targets: [
@@ -58,6 +61,7 @@ export const useGazeStore = create<GazeState>((set) => ({
   setConnected: (connected) => set({ isConnected: connected }),
   setWebcamMode: (mode) => set({ isWebcamMode: mode }),
   setCalibrated: (calibrated) => set({ isCalibrated: calibrated }),
+  setGazeCloudLoaded: (loaded) => set({ isGazeCloudLoaded: loaded }),
   setScreenGaze: (x, y) => set({ screenGaze: { x, y } }),
   setHoverTarget: (id) => set({ activeHoverTargetId: id }),
   updateTargetGraspProgress: (id, progress, isGrasped) => 
