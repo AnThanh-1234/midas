@@ -2,16 +2,12 @@ import sys
 import os
 import numpy as np
 
-ALGORITHM_DIR = r"D:\cac_mon_hoc\HTTM\eyemovement_update_v1"
-if ALGORITHM_DIR not in sys.path:
-    sys.path.insert(0, ALGORITHM_DIR)
-
-from hierarchical_gmm_hmm import HierarchicalGMMHMMClassifier
+from notebook_classifier import NotebookClassifier
 
 class EyeMovementClassifierService:
     def __init__(self, window_size: int = 30):
         self.window_size = window_size
-        self.classifier = HierarchicalGMMHMMClassifier(k_max=6, max_iter=200)
+        self.classifier = NotebookClassifier(k_max=10, min_seg_len=15)
 
     def predict(self, buffer_data):
         """
