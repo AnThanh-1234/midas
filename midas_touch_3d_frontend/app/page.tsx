@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { Scene3D } from '@/components/Scene3D';
 import { OverlayUI } from '@/components/OverlayUI';
+import { WebGazerManager } from '@/components/WebGazerManager';
 
 export default function Home() {
   const [mounted, setMounted] = useState(false);
@@ -15,6 +16,7 @@ export default function Home() {
 
   return (
     <main className="relative w-screen h-screen overflow-hidden bg-slate-950 font-sans antialiased select-none">
+      <WebGazerManager />
       <OverlayUI />
       <Scene3D />
       

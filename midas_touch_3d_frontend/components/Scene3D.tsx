@@ -2,7 +2,7 @@
 
 import React, { useRef, useEffect, useState } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { PointerLockControls, Environment, Grid, useCursor } from '@react-three/drei';
+import { PointerLockControls, Environment, Grid, OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import { io, Socket } from 'socket.io-client';
 import { useGazeStore } from '../store/useGazeStore';
@@ -31,18 +31,15 @@ const RobotArm = () => {
 
 // Target Objects
 const TargetObjects = () => {
-  const { targets, setHoverTarget, updateTargetGraspProgress, label, activeHoverTargetId } = useGazeStore();
-  const fixationTimerRef = useRef<{ [key: string]: number }>({});
-  
-  // Track hovered target id from raycaster in GazeController
-  // The actual collision logic is handled there and updates Zustand.
-  // Here we just render them.
+  const { targets, activeHoverTargetId } = useGazeStore();
 
   return (
     <>
       {targets.map((target) => (
         <mesh 
-          key={target.id} 
+          key={target.id}
+          name={target.id}
+          userData={{ isTarget: true }}
           position={target.position}
           castShadow
           receiveShadow
@@ -73,6 +70,10 @@ const GazeController = () => {
   const raycaster = new THREE.Raycaster();
   const lastPosRef = useRef<{ x: number; y: number; time: number } | null>(null);
   const fixationTimerRef = useRef<{ [key: string]: number }>({});
+  
+  // Smoothing history
+  const historyX = useRef<number[]>([]);
+  const historyY = useRef<number[]>([]);
 
   useEffect(() => {
     const socket = io(SOCKET_URL, {
@@ -92,90 +93,46 @@ const GazeController = () => {
     };
   }, []);
 
-  const isWebGazerInitialized = useRef(false);
-  const isWebcamMode = useGazeStore((state) => state.isWebcamMode);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    
-    const setupWebgazer = () => {
-      console.log("[WebGazer] setupWebgazer called. isWebcamMode:", isWebcamMode);
-      
-      if (isWebcamMode) {
-        if (window.webgazer && !isWebGazerInitialized.current) {
-          console.log("[WebGazer] Initializing for the first time...");
-          window.webgazer.setGazeListener((data: any, elapsedTime: number) => {
-            if (data == null || !useGazeStore.getState().isWebcamMode) return;
-            
-            const ndcX = (data.x / window.innerWidth) * 2 - 1;
-            const ndcY = -(data.y / window.innerHeight) * 2 + 1;
-            
-            useGazeStore.getState().setScreenGaze(ndcX, ndcY);
-          }).begin();
-
-          window.webgazer.showVideoPreview(true).showPredictionPoints(true);
-          isWebGazerInitialized.current = true;
-          console.log("[WebGazer] Started successfully.");
-        } else if (window.webgazer && isWebGazerInitialized.current) {
-          console.log("[WebGazer] Resuming...");
-          window.webgazer.resume();
-          window.webgazer.showVideoPreview(true).showPredictionPoints(true);
-        }
-      } else {
-        if (window.webgazer && window.webgazer.isReady && window.webgazer.isReady()) {
-            console.log("[WebGazer] Pausing...");
-            window.webgazer.pause();
-            window.webgazer.showVideoPreview(false).showPredictionPoints(false);
-        }
-      }
-    };
-
-    let checkWebgazer: NodeJS.Timeout;
-    if (window.webgazer) {
-      setupWebgazer();
-    } else {
-      checkWebgazer = setInterval(() => {
-        if (window.webgazer) {
-          console.log("[WebGazer] Script loaded successfully from CDN.");
-          clearInterval(checkWebgazer);
-          setupWebgazer();
-        }
-      }, 100);
-    }
-
-    return () => {
-       if (checkWebgazer) clearInterval(checkWebgazer);
-    };
-  }, [isWebcamMode]); // Re-run when isWebcamMode changes
-
-  // Global cleanup when component unmounts entirely
-  useEffect(() => {
-    return () => {
-       if (typeof window !== 'undefined' && window.webgazer && window.webgazer.isReady && window.webgazer.isReady()) {
-         window.webgazer.pause();
-         window.webgazer.showVideoPreview(false).showPredictionPoints(false);
-       }
-    };
-  }, []);
-
   useFrame((state) => {
     const { isWebcamMode, screenGaze } = useGazeStore.getState();
     
+    let rayOrigin = new THREE.Vector2(0, 0);
+
     if (isWebcamMode) {
-      // Raycast from webcam eye gaze position on screen
-      raycaster.setFromCamera(new THREE.Vector2(screenGaze.x, screenGaze.y), camera);
-    } else {
-      // Raycast from center of camera (pointer is [0,0] for PointerLock)
-      raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+      // Smoothing filter
+      historyX.current.push(screenGaze.x);
+      historyY.current.push(screenGaze.y);
+      if (historyX.current.length > 12) historyX.current.shift();
+      if (historyY.current.length > 12) historyY.current.shift();
+
+      const avgX = historyX.current.reduce((a, b) => a + b, 0) / historyX.current.length;
+      const avgY = historyY.current.reduce((a, b) => a + b, 0) / historyY.current.length;
+      
+      rayOrigin.set(avgX, avgY);
     }
+
+    raycaster.setFromCamera(rayOrigin, camera);
     
     // Find intersection with objects (assuming objects have names or are in a group, but we'll just check distance for simplicity)
     // Actually, let's just map camera rotation to normalized coordinates for training data
     
-    // Instead of full 3D to 2D mapping which can be complex, we can use the intersection point on the table (y=0 plane)
-    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-    const targetVector = new THREE.Vector3();
-    raycaster.ray.intersectPlane(plane, targetVector);
+    // Bắn tia Raycaster để tìm vật thể 3D bị nhìn trúng
+    const intersects = raycaster.intersectObjects(scene.children, true);
+    
+    // Tìm vật thể đầu tiên có userData.isTarget
+    const hit = intersects.find((intersect) => intersect.object.userData?.isTarget);
+    
+    let currentlyHoveredId: string | null = null;
+    let targetVector = new THREE.Vector3();
+
+    if (hit) {
+      currentlyHoveredId = hit.object.name;
+      targetVector = hit.point;
+    } else {
+      // Nếu không trúng vật thể nào, dùng giao điểm với mặt bàn (y=0) để lấy tọa độ nền
+      const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+      raycaster.ray.intersectPlane(plane, targetVector);
+    }
 
     if (targetVector) {
       // Map x from [-5, 5] to [0, 1] and z from [-5, 5] to [0, 1]
@@ -197,24 +154,10 @@ const GazeController = () => {
 
       lastPosRef.current = { x: normX, y: normY, time: now };
 
-      // Send to server at ~30fps by throttling if needed, but useFrame is 60fps. 
-      // We'll send every frame for smoothness in this demo.
       if (socketRef.current?.connected) {
         socketRef.current.emit('gaze_data', { x: normX, y: normY, v: velocity, timestamp: now });
       }
 
-      // Check collision with targets
-      let currentlyHoveredId: string | null = null;
-      for (const t of targets) {
-        const dx = targetVector.x - t.position[0];
-        const dz = targetVector.z - t.position[2];
-        const dist = Math.sqrt(dx*dx + dz*dz);
-        if (dist < 1.0) { // hover radius
-          currentlyHoveredId = t.id;
-          break;
-        }
-      }
-      
       const prevHoveredId = useGazeStore.getState().activeHoverTargetId;
       if (currentlyHoveredId !== prevHoveredId) {
         setHoverTarget(currentlyHoveredId);
@@ -249,6 +192,8 @@ const GazeController = () => {
 };
 
 export const Scene3D = () => {
+  const { isWebcamMode, isCalibrated } = useGazeStore();
+  
   return (
     <Canvas shadows camera={{ position: [0, 4, 6], fov: 60 }}>
       <color attach="background" args={['#0f172a']} />
@@ -261,7 +206,8 @@ export const Scene3D = () => {
         shadow-mapSize-height={1024} 
       />
       
-      <PointerLockControls />
+      {!isWebcamMode && <PointerLockControls />}
+      {isWebcamMode && isCalibrated && <OrbitControls makeDefault enablePan={false} maxPolarAngle={Math.PI / 2.1} />}
       
       <GazeController />
       
