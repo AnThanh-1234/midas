@@ -75,3 +75,6 @@ Thumbs.db
 *.tsbuildinfo
 next-env.d.ts
 .vercel/
+
+# Midas backend venv
+midas_touch_3d_backend/venv
