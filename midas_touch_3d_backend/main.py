@@ -102,6 +102,7 @@ async def disconnect(sid):
         del client_buffers[sid]
     if sid in client_controllers:
         del client_controllers[sid]
+    classifier_service.cleanup_participant(sid)
 
 @sio.event
 async def gaze_data(sid, data):
@@ -115,8 +116,8 @@ async def gaze_data(sid, data):
     if len(buffer) > WINDOW_SIZE:
         buffer.pop(0)
         
-    # Bước 1: Trích xuất nhãn hành vi từ GMM-HMM
-    predicted_label = classifier_service.predict(buffer)
+    # Bước 1: Trích xuất nhãn hành vi từ Hierarchical GMM-HMM
+    predicted_label = classifier_service.predict(buffer, sid=sid)
     label_names = {0: "Fixation", 1: "Smooth Pursuit", 2: "Saccade"}
     
     raw_x = data.get("x", 0.0)
