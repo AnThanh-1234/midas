@@ -9,7 +9,7 @@ from classifier_service import EyeMovementClassifierService
 # LỚP HẬU XỬ LÝ (POST-PROCESSING) SMOOTHING TOẠ ĐỘ
 # =====================================================================
 class EyeCursorController:
-    def __init__(self, buffer_size=10, alpha=0.3):
+    def __init__(self, buffer_size=20, alpha=0.3, debounce_frames=4):
         self.buffer_size = buffer_size
         self.alpha = alpha
         
@@ -20,13 +20,27 @@ class EyeCursorController:
         # Lưu vết vị trí cuối cùng cho EMA (Smooth Pursuit)
         self.last_ema_x = None
         self.last_ema_y = None
+        
+        # Lưu lịch sử nhãn để chống nhiễu (Debounce)
+        self.debounce_frames = debounce_frames
+        self.label_history = collections.deque(maxlen=debounce_frames)
+        self.current_stable_label = 0
 
     def process_coordinates(self, raw_x, raw_y, label):
         """
         Xử lý làm mượt toạ độ dựa trên nhãn ý định của mắt:
         0: Fixation, 1: Smooth Pursuit, 2: Saccade
         """
-        if label == 0:  # Fixation: Đang tập trung
+        # Cập nhật lịch sử nhãn
+        self.label_history.append(label)
+        
+        # Chỉ chuyển trạng thái nếu N frame liên tiếp có cùng một nhãn (tránh chập chờn)
+        if len(self.label_history) == self.debounce_frames and len(set(self.label_history)) == 1:
+            self.current_stable_label = label
+            
+        stable_label = self.current_stable_label
+        
+        if stable_label == 0:  # Fixation: Đang tập trung
             # Lưu tọa độ vào buffer và tính trung bình cộng để chống rung (gaze drift)
             self.fixation_buffer_x.append(raw_x)
             self.fixation_buffer_y.append(raw_y)
@@ -39,7 +53,7 @@ class EyeCursorController:
             self.last_ema_y = smoothed_y
             return smoothed_x, smoothed_y
             
-        elif label == 1:  # Smooth Pursuit: Đang trượt bám mục tiêu
+        elif stable_label == 1:  # Smooth Pursuit: Đang trượt bám mục tiêu
             # Mắt đang chuyển động mượt, clear ngay lập tức buffer đứng yên
             self.fixation_buffer_x.clear()
             self.fixation_buffer_y.clear()
@@ -53,7 +67,7 @@ class EyeCursorController:
                 self.last_ema_y = self.alpha * raw_y + (1 - self.alpha) * self.last_ema_y
             return self.last_ema_x, self.last_ema_y
             
-        elif label == 2:  # Saccade: Chuyển hướng nhanh
+        elif stable_label == 2:  # Saccade: Chuyển hướng nhanh
             # Mắt chớp/nhảy hướng: Vứt bỏ mọi buffer, nhảy tức thời đến tọa độ raw
             self.fixation_buffer_x.clear()
             self.fixation_buffer_y.clear()
@@ -92,7 +106,7 @@ def read_root():
 async def connect(sid, environ):
     print(f"Client connected: {sid}")
     client_buffers[sid] = []
-    client_controllers[sid] = EyeCursorController(buffer_size=10, alpha=0.3)
+    client_controllers[sid] = EyeCursorController(buffer_size=20, alpha=0.3, debounce_frames=4)
     await sio.emit("connection_ack", {"status": "connected", "sid": sid}, room=sid)
 
 @sio.event
@@ -108,7 +122,7 @@ async def disconnect(sid):
 async def gaze_data(sid, data):
     if sid not in client_buffers:
         client_buffers[sid] = []
-        client_controllers[sid] = EyeCursorController(buffer_size=10, alpha=0.3)
+        client_controllers[sid] = EyeCursorController(buffer_size=20, alpha=0.3, debounce_frames=4)
         
     buffer = client_buffers[sid]
     buffer.append(data)
