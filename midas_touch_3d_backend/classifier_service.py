@@ -56,37 +56,39 @@ class EyeMovementClassifierService:
         if sid in self.participant_models:
             del self.participant_models[sid]
 
+    def _threshold_label(self, velocity: float) -> int:
+        """Fallback rõ ràng, nhẹ dựa trên ngưỡng vận tốc khi chưa có trained base model."""
+        if velocity > 0.05:
+            return 2  # Saccade
+        elif velocity > 0.01:
+            return 1  # Smooth Pursuit
+        return 0  # Fixation
+
     def predict(self, buffer_data, sid: str = None):
         """
         buffer_data: list of dicts [{'x': float, 'y': float, 'v': float}, ...]
         sid: participant ID / socket ID để dùng đúng participant-base model
         Returns: integer label (0: Fixation, 1: Smooth Pursuit, 2: Saccade)
         """
-        # Nếu chưa đủ data (ngưỡng tối thiểu), trả về kết quả fallback an toàn dựa theo ngưỡng vận tốc
-        if not buffer_data or len(buffer_data) < 5:
-            last_v = buffer_data[-1]['v'] if buffer_data else 0.0
-            if last_v > 0.05:
-                return 2  # Saccade
-            elif last_v > 0.01:
-                return 1  # Smooth Pursuit
-            return 0  # Fixation
+        if not buffer_data:
+            return 0
+
+        last_v = buffer_data[-1].get('v', 0.0)
+
+        # Nếu chưa đủ data hoặc chưa có base model đã huấn luyện, dùng fallback ngưỡng vận tốc nhẹ
+        base_model = self.participant_models.get(sid) if sid else None
+        if base_model is None:
+            return self._threshold_label(last_v)
 
         try:
             x_arr = np.array([pt['x'] for pt in buffer_data])
             y_arr = np.array([pt['y'] for pt in buffer_data])
             v_arr = np.array([pt['v'] for pt in buffer_data])
 
-            base_model = self.participant_models.get(sid) if sid else None
             labels = self.classifier.fit_predict(x_arr, y_arr, v_arr, base_model=base_model)
             if len(labels) > 0:
                 return int(labels[-1])
-            return 0
+            return self._threshold_label(last_v)
         except Exception as e:
-            print(f"[Classifier Error]: {e}")
-            # Fallback an toàn khi lỗi
-            last_v = buffer_data[-1]['v']
-            if last_v > 0.05:
-                return 2
-            elif last_v > 0.01:
-                return 1
-            return 0
+            print(f"[GMM-HMM Predict Exception ({sid})]: {e}")
+            return self._threshold_label(last_v)

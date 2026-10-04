@@ -120,12 +120,19 @@ def load_model(sid: str):
     else:
         raise HTTPException(status_code=404, detail="Saved model not found or failed to load")
 
+import asyncio
+
+client_train = {}      # sid -> list velocity
+TRAIN_SAMPLES = 600    # ~10-20 giây thu thập dữ liệu con ngươi
+
 @sio.event
 async def connect(sid, environ):
     print(f"Client connected: {sid}")
     client_buffers[sid] = []
     client_controllers[sid] = EyeCursorController(buffer_size=20, alpha=0.3, debounce_frames=4)
     client_smoothers[sid] = GazeSmoother()
+    # Thử tự động tải mô hình đã lưu trước đó cho participant
+    classifier_service.load_participant_model(sid)
     await sio.emit("connection_ack", {"status": "connected", "sid": sid}, room=sid)
 
 @sio.event
@@ -135,6 +142,8 @@ async def disconnect(sid):
         del client_buffers[sid]
     if sid in client_controllers:
         del client_controllers[sid]
+    if sid in client_train:
+        del client_train[sid]
     client_smoothers.pop(sid, None)
     classifier_service.cleanup_participant(sid)
 
@@ -149,8 +158,17 @@ async def gaze_data(sid, data):
     
     if len(buffer) > WINDOW_SIZE:
         buffer.pop(0)
+
+    # Thu thập mẫu để huấn luyện Base Model nếu participant chưa có model
+    if sid not in classifier_service.participant_models and data.get("nx") is not None:
+        client_train.setdefault(sid, []).append(data.get("v", 0.0))
+        if len(client_train[sid]) >= TRAIN_SAMPLES:
+            vels = np.array(client_train.pop(sid))
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, classifier_service.init_participant_model, sid, vels)
+            print(f"[GMM-HMM] Trained participant base model for {sid}")
         
-    # Bước 1: Trích xuất nhãn hành vi từ Hierarchical GMM-HMM
+    # Bước 1: Trích xuất nhãn hành vi từ Hierarchical GMM-HMM (hoặc threshold fallback)
     predicted_label = classifier_service.predict(buffer, sid=sid)
     label_names = {0: "Fixation", 1: "Smooth Pursuit", 2: "Saccade"}
     
