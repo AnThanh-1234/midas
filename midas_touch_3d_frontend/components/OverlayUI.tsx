@@ -5,7 +5,7 @@ import { useGazeStore } from '../store/useGazeStore';
 import { Activity, ShieldCheck, ShieldAlert, Cpu, Eye, Zap, Save, Download } from 'lucide-react';
 
 export const OverlayUI: React.FC = () => {
-  const { x, y, velocity, label, labelName, isConnected, graspedTargetId, targets, resetAllTargets, isWebcamMode, setWebcamMode, screenGaze, isGazeCloudLoaded, socketId } = useGazeStore();
+  const { x, y, velocity, label, labelName, isConnected, graspedTargetId, targets, resetAllTargets, isWebcamMode, setWebcamMode, screenGaze, filteredGaze, isGazeCloudLoaded, socketId } = useGazeStore();
 
   const handleSaveModel = async () => {
     if (!socketId) return alert('Chưa kết nối đến server!');
@@ -56,6 +56,8 @@ export const OverlayUI: React.FC = () => {
 
   const graspedTarget = targets.find((t) => t.id === graspedTargetId);
   const activeHoverTarget = targets.find((t) => t.id === useGazeStore.getState().activeHoverTargetId);
+
+  const g = filteredGaze ?? screenGaze;
 
   return (
     <div className="absolute inset-0 pointer-events-none flex flex-col justify-between p-6 z-50">
@@ -117,7 +119,7 @@ export const OverlayUI: React.FC = () => {
       <div 
         className="absolute pointer-events-none -translate-x-1/2 -translate-y-1/2"
         style={isWebcamMode 
-            ? { left: `${(screenGaze.x + 1) * 50}%`, top: `${(-screenGaze.y + 1) * 50}%` }
+            ? { left: `${(g.x + 1) * 50}%`, top: `${(-g.y + 1) * 50}%` }
             : { left: '50%', top: '50%' }}
       >
         <div className={`w-4 h-4 rounded-full transition-all duration-75 ${

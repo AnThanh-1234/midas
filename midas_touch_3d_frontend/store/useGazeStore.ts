@@ -19,6 +19,7 @@ export interface GazeState {
   isConnected: boolean;
   isWebcamMode: boolean;
   screenGaze: { x: number, y: number }; // Normalized Device Coordinates [-1, 1] for 3D Raycasting
+  filteredGaze: { x: number; y: number } | null;
   targets: TargetObject[];
   activeHoverTargetId: string | null;
   graspedTargetId: string | null;
@@ -50,6 +51,7 @@ export const useGazeStore = create<GazeState>((set) => ({
   isCalibrated: false,
   isGazeCloudLoaded: false,
   screenGaze: { x: 0, y: 0 },
+  filteredGaze: null,
   robotPosition: [2, 2.5, -3], // default rest position
   targets: [
     { id: 'obj-1', name: 'Red Box', position: [-2, 0.5, -2], color: '#ef4444', geometry: 'box', isGrasped: false, graspProgress: 0 },

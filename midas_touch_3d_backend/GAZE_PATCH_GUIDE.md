@@ -1,65 +1,84 @@
-'use client';
+# Hướng dẫn tích hợp: mắt đỡ phải "banh", tracking mượt hơn
 
-import React, { useRef, useEffect, useState, useMemo } from 'react';
-import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { PointerLockControls, Environment, Grid, OrbitControls } from '@react-three/drei';
-import * as THREE from 'three';
-import { io, Socket } from 'socket.io-client';
-import { useGazeStore } from '../store/useGazeStore';
+Copy `gaze_filter.py` vào `midas_touch_3d_backend/`, rồi áp dụng 3 phần dưới.
 
-const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://127.0.0.1:8001';
+---
 
-// Robot Arm Component
-const RobotArm = () => {
-  const robotPosition = useGazeStore((state) => state.robotPosition);
-  const ref = useRef<THREE.Mesh>(null);
+## 1. Backend — `main.py`
 
-  useFrame((state, delta) => {
-    if (ref.current) {
-      // Interpolate position smoothly
-      ref.current.position.lerp(new THREE.Vector3(...robotPosition), delta * 5);
-    }
-  });
+```python
+from gaze_filter import GazeSmoother
 
-  return (
-    <mesh ref={ref} position={robotPosition} castShadow>
-      <cylinderGeometry args={[0.2, 0.2, 2, 32]} />
-      <meshStandardMaterial color="#94a3b8" metalness={0.8} roughness={0.2} />
-    </mesh>
-  );
-};
+client_smoothers = {}   # thêm cạnh client_controllers
+```
 
-// Target Objects
-const TargetObjects = () => {
-  const { targets, activeHoverTargetId } = useGazeStore();
+Trong `connect`:
+```python
+client_smoothers[sid] = GazeSmoother()
+```
 
-  return (
-    <>
-      {targets.map((target) => (
-        <mesh 
-          key={target.id}
-          name={target.id}
-          userData={{ isTarget: true }}
-          position={target.position}
-          castShadow
-          receiveShadow
-        >
-          {target.geometry === 'box' && <boxGeometry args={[0.8, 0.8, 0.8]} />}
-          {target.geometry === 'sphere' && <sphereGeometry args={[0.5, 32, 32]} />}
-          {target.geometry === 'cylinder' && <cylinderGeometry args={[0.4, 0.4, 1, 32]} />}
-          
-          <meshStandardMaterial 
-            color={target.isGrasped ? '#10b981' : target.color} 
-            emissive={activeHoverTargetId === target.id && !target.isGrasped ? target.color : '#000000'}
-            emissiveIntensity={activeHoverTargetId === target.id && !target.isGrasped ? 0.5 : 0}
-            metalness={0.3} 
-            roughness={0.4} 
-          />
-        </mesh>
-      ))}
-    </>
-  );
-};
+Trong `disconnect`:
+```python
+client_smoothers.pop(sid, None)
+```
+
+Thay phần cuối của `gaze_data` (từ sau `process_coordinates`):
+
+```python
+    smoothed_x, smoothed_y = controller.process_coordinates(raw_x, raw_y, predicted_label)
+    stable_label = controller.current_stable_label     # nhãn ĐÃ debounce
+
+    # Làm mượt gaze màn hình (NDC) -> frontend dùng cái này để bắn tia
+    sm = client_smoothers.setdefault(sid, GazeSmoother())
+    ts = data.get("timestamp", 0.0) / 1000.0
+    sx, sy = sm.process(data.get("nx"), data.get("ny"), ts, stable_label)
+
+    await sio.emit("gaze_result", {
+        "x": smoothed_x, "y": smoothed_y,
+        "raw_x": raw_x, "raw_y": raw_y,
+        "v": data.get("v", 0.0),
+        "label": stable_label,                         # <-- trước đây gửi predicted_label
+        "label_name": label_names[stable_label],
+        "sx": sx, "sy": sy,
+        "buffer_size": len(buffer),
+    }, room=sid)
+```
+
+Hai event cho bước hiệu chỉnh đa thức (tuỳ chọn, xem mục 3):
+
+```python
+@sio.event
+async def calib_add(sid, data):
+    client_smoothers.setdefault(sid, GazeSmoother()).calib.add_sample(data["raw"], data["target"])
+
+@sio.event
+async def calib_fit(sid, data=None):
+    ok = client_smoothers.setdefault(sid, GazeSmoother()).calib.fit()
+    await sio.emit("calib_result", {"ok": ok}, room=sid)
+```
+
+---
+
+## 2. Frontend
+
+### 2a. `store/useGazeStore.ts`
+Thêm vào interface `GazeState`: `filteredGaze: { x: number; y: number } | null;`
+Và trong `create(...)`: `filteredGaze: null,`
+
+### 2b. `components/OverlayUI.tsx`
+Lấy thêm `filteredGaze` từ store, và crosshair dùng nó:
+
+```tsx
+const g = filteredGaze ?? screenGaze;
+style={isWebcamMode
+  ? { left: `${(g.x + 1) * 50}%`, top: `${(-g.y + 1) * 50}%` }
+  : { left: '50%', top: '50%' }}
+```
+
+### 2c. `components/Scene3D.tsx` — thay toàn bộ `GazeController`
+
+```tsx
+import { useMemo } from 'react'; // thêm vào import react
 
 const SNAP_RADIUS = 0.09;   // NDC: nhìn gần vật trong bán kính này vẫn tính là trúng
 const GRACE_MS = 300;       // lỡ trượt khỏi vật < 300ms thì KHÔNG mất tiến độ
@@ -176,39 +195,30 @@ const GazeController = () => {
 
   return null;
 };
+```
 
-export const Scene3D = () => {
-  const { isWebcamMode, isCalibrated } = useGazeStore();
-  
-  return (
-    <Canvas shadows camera={{ position: [0, 4, 6], fov: 60 }}>
-      <color attach="background" args={['#0f172a']} />
-      <ambientLight intensity={0.5} />
-      <directionalLight 
-        position={[10, 10, 5]} 
-        intensity={1} 
-        castShadow 
-        shadow-mapSize-width={1024} 
-        shadow-mapSize-height={1024} 
-      />
-      
-      {!isWebcamMode && <PointerLockControls />}
-      {isWebcamMode && isCalibrated && <OrbitControls makeDefault enablePan={false} maxPolarAngle={Math.PI / 2.1} />}
-      
-      <GazeController />
-      
-      {/* Table Floor */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.1, 0]} receiveShadow>
-        <planeGeometry args={[20, 20]} />
-        <meshStandardMaterial color="#1e293b" />
-      </mesh>
-      
-      <Grid position={[0, 0.01, 0]} args={[20, 20]} cellColor="#334155" sectionColor="#475569" fadeDistance={15} />
+---
 
-      <TargetObjects />
-      <RobotArm />
-      
-      <Environment preset="city" />
-    </Canvas>
-  );
-};
+## 3. (Tuỳ chọn) Hiệu chỉnh đa thức bậc 2 — công thức 2.1
+
+GazeCloud đã tự calibrate, nhưng thường vẫn lệch có hệ thống ở mép màn hình. Sau khi `OnCalibrationComplete`, hiện 9 chấm (lưới 3×3 tại NDC ±0.8 và 0), mỗi chấm thu trung bình ~1 giây gaze thô rồi gửi:
+
+```ts
+socket.emit('calib_add', { raw: [avgRawX, avgRawY], target: [dotNdcX, dotNdcY] });
+// ... sau chấm cuối:
+socket.emit('calib_fit');
+```
+
+Từ đó mọi mẫu mới đi qua `W` trước One Euro. Nếu kết quả tệ hơn, gọi `calib.reset()` để về identity.
+
+---
+
+## Tinh chỉnh
+
+| Triệu chứng | Chỉnh |
+|---|---|
+| Con trỏ vẫn rung khi nhìn yên | giảm `OneEuro.min_cutoff` (0.4 → 0.2), tăng `GazeStabilizer.radius` |
+| Con trỏ bị trễ khi lia mắt | tăng `beta` (3 → 6) |
+| Khó "gắp" trúng vật nhỏ | tăng `SNAP_RADIUS` (0.09 → 0.14) |
+| Gắp nhầm vật bên cạnh | giảm `SNAP_RADIUS` hoặc tăng `DWELL_MS` |
+| Hay bị mất tiến độ khi chớp mắt | tăng `GRACE_MS` |

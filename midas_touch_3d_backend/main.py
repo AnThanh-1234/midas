@@ -4,6 +4,7 @@ import collections
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from classifier_service import EyeMovementClassifierService
+from gaze_filter import GazeSmoother
 
 # =====================================================================
 # LỚP HẬU XỬ LÝ (POST-PROCESSING) SMOOTHING TOẠ ĐỘ
@@ -94,6 +95,7 @@ socket_app = socketio.ASGIApp(sio, app)
 
 client_buffers = {}
 client_controllers = {}
+client_smoothers = {}
 
 WINDOW_SIZE = 30
 classifier_service = EyeMovementClassifierService(window_size=WINDOW_SIZE)
@@ -123,6 +125,7 @@ async def connect(sid, environ):
     print(f"Client connected: {sid}")
     client_buffers[sid] = []
     client_controllers[sid] = EyeCursorController(buffer_size=20, alpha=0.3, debounce_frames=4)
+    client_smoothers[sid] = GazeSmoother()
     await sio.emit("connection_ack", {"status": "connected", "sid": sid}, room=sid)
 
 @sio.event
@@ -132,6 +135,7 @@ async def disconnect(sid):
         del client_buffers[sid]
     if sid in client_controllers:
         del client_controllers[sid]
+    client_smoothers.pop(sid, None)
     classifier_service.cleanup_participant(sid)
 
 @sio.event
@@ -156,18 +160,35 @@ async def gaze_data(sid, data):
     # Bước 2: Hậu xử lý toạ độ (Coordinate Smoothing)
     controller = client_controllers[sid]
     smoothed_x, smoothed_y = controller.process_coordinates(raw_x, raw_y, predicted_label)
-    
-    # Bước 3: Trả toạ độ đã làm mượt (x, y) về cho Frontend
+    stable_label = controller.current_stable_label
+
+    # Làm mượt gaze màn hình (NDC) -> frontend dùng cái này để bắn tia
+    sm = client_smoothers.setdefault(sid, GazeSmoother())
+    ts = data.get("timestamp", 0.0) / 1000.0
+    sx, sy = sm.process(data.get("nx"), data.get("ny"), ts, stable_label)
+
+    # Bước 3: Trả toạ độ đã làm mượt (x, y) và (sx, sy) về cho Frontend
     await sio.emit("gaze_result", {
         "x": smoothed_x,
         "y": smoothed_y,
         "raw_x": raw_x,
         "raw_y": raw_y,
         "v": data.get("v", 0.0),
-        "label": predicted_label,
-        "label_name": label_names[predicted_label],
+        "label": stable_label,
+        "label_name": label_names[stable_label],
+        "sx": sx,
+        "sy": sy,
         "buffer_size": len(buffer)
     }, room=sid)
+
+@sio.event
+async def calib_add(sid, data):
+    client_smoothers.setdefault(sid, GazeSmoother()).calib.add_sample(data["raw"], data["target"])
+
+@sio.event
+async def calib_fit(sid, data=None):
+    ok = client_smoothers.setdefault(sid, GazeSmoother()).calib.fit()
+    await sio.emit("calib_result", {"ok": ok}, room=sid)
 
 if __name__ == "__main__":
     uvicorn.run("main:socket_app", host="127.0.0.1", port=8001, reload=True)
