@@ -1,326 +1,293 @@
 # =====================================================================
-# SUA LOI HIERARCHICAL GMM-HMM: 4 THAY DOI CHINH
-#   (a) Chuan hoa (x, y, log_v) truoc khi fit tang 1 -> velocity khong bi
-#       "nuot" boi x,y do lech scale (x,y ~0-1, velocity ~0.0001-0.02).
-#   (b) KMeans-init cho tang 2 (thay vi de GMMHMM random init) -> EM co
-#       diem xuat phat hop ly, giam nguy co "Degenerate mixture covariance".
-#   (c) n_mix thich ung theo kich thuoc cum: cum qua nho -> n_mix=1
-#       (tuong duong 1 Gaussian/state, giam tham so can hoc).
-#   (d) Layer 2 duoc fit MOT LAN tren toan bo velocity CUA CHINH participant
-#       do (KHONG pool cheo qua nguoi khac), roi CHI refit nhe (it iteration,
-#       xuat phat tu tham so nay) cho cum nao du lon; cum qua nho thi dung
-#       thang participant-base model de decode, KHONG refit rieng.
+# PIPELINE GMM-HMM HAI TẦNG (GMM_HMM_full_layer.py)
+#   - Layer 1: GMM-HMM phân đoạn chuỗi điểm nhìn trên (x, y) với K chọn bằng Elbow K-Means.
+#   - Layer 2: GMM-HMM 3 trạng thái phân loại vận tốc (v) cho từng phân đoạn đủ dài.
+#   - Velocity mapping: K-Means 3 cụm gom mean velocity gán nhãn Fixation / Smooth Pursuit / Saccade.
+#   - Tham số: N_MIX = 1, covariance_type = 'spherical', MIN_SEG_LEN = 10, standardize = False.
 # =====================================================================
 import warnings
 import numpy as np
+import pandas as pd
 from hmmlearn.hmm import GMMHMM
-from sklearn.cluster import KMeans as _KMeans
+from sklearn.cluster import KMeans
 
-LOG_EPS4 = 1e-7
+warnings.filterwarnings("ignore")
+
 RANDOM_STATE = 42
-MIN_SEG_LEN = 15
+MIN_SEG_LEN = 10
+N_MIX_LAYER2_FULL = 1
+N_MIX = 1
+COVARIANCE_TYPE = 'spherical'
+STANDARDIZE = False
 
-# ---- Cau hinh ----
-LAYER1_COV_TYPE    = 'diag'   # 'full' de dung nhu main.py goc nhung de an
-                               # toan (it du lieu/participant) nen dung diag
+CFG = {
+    "seed": RANDOM_STATE,
+    "k_max": 9,
+    "kmeans_max_iter": 100,
+    "kmeans_restarts": 10,
+    "l1_features": ("x", "y"),
+    "l2_features": ("v",),
+    "n_mix": N_MIX,
+    "covariance_type": COVARIANCE_TYPE,
+    "n_iter": 50,
+    "tol": 1e-5,
+    "n_restarts": 5,
+    "min_seg_len": MIN_SEG_LEN,
+    "standardize": STANDARDIZE,
+}
 
-N_MIX_LAYER2_FULL  = 1        # TAM THOI GIAM VE 1 (giong GaussianHMM cell 10 cu)
-                               # de kiem tra xem mixture co phai nguyen nhan
-N_MIX_LAYER2_SMALL = 1
-MIN_REFIT_SAMPLES  = 150      # nguong so mau de refit rieng cho sub-path
-MIN_MIX_SAMPLES    = 300
 
-# --- Cac ham tien ich phan doan ---
-def compute_sse_curve(features, k_min=2, k_max=10):
-    pts = features[:, :2]
-    ks, vals = [], []
-    for k in range(k_min, k_max + 1):
-        m = _KMeans(n_clusters=k, init="k-means++", n_init=10, max_iter=300, random_state=RANDOM_STATE)
-        m.fit(pts)
-        ks.append(k)
-        vals.append(float(m.inertia_))
-    return ks, vals
+def scale(data, enabled):
+    if enabled:
+        from sklearn.preprocessing import StandardScaler
+        return StandardScaler().fit_transform(data)
+    return data
 
-def choose_elbow_k(k_values, sse_values):
-    if len(k_values) <= 2:
-        return int(k_values[0])
-    p1 = np.array([k_values[0],  sse_values[0]])
-    p2 = np.array([k_values[-1], sse_values[-1]])
-    line = p2 - p1
-    line_len = np.linalg.norm(line)
-    if line_len < 1e-12:
-        return 3
-    dists = []
-    for k, s in zip(k_values, sse_values):
-        vec = np.array([k, s]) - p1
-        cross_2d = line[0] * vec[1] - line[1] * vec[0]
-        dists.append(abs(cross_2d) / line_len)
-    return int(np.clip(k_values[int(np.argmax(dists))], 2, 8))
 
-def runs_from_states(states):
-    n = len(states)
-    runs, start = [], 0
-    if n == 0:
-        return runs
-    for i in range(1, n):
-        if states[i] != states[i - 1]:
-            runs.append((start, i, int(states[start])))
-            start = i
-    runs.append((start, n, int(states[start])))
-    return runs
-
-def merge_short_runs(runs, min_len):
-    if len(runs) <= 1:
-        return runs
-    merged = list(runs)
-    changed = True
-    while changed and len(merged) > 1:
-        changed = False
-        for i, (s, e, st) in enumerate(merged):
-            if e - s < min_len:
-                if i > 0:
-                    ps, pe, pst = merged[i - 1]
-                    merged[i - 1] = (ps, e, pst)
-                    del merged[i]
-                else:
-                    ns, ne, nst = merged[i + 1]
-                    merged[i] = (s, ne, nst)
-                    del merged[i + 1]
-                changed = True
+def kmeans_sse(data, n_clusters, max_iter, restarts, rng):
+    """Tính SSE bằng K-Means tự cài đặt, không dùng sklearn KMeans."""
+    best_sse = np.inf
+    for _ in range(restarts):
+        centers = data[rng.choice(len(data), n_clusters, replace=False)].copy()
+        for _ in range(max_iter):
+            distances = ((data[:, None, :] - centers[None, :, :]) ** 2).sum(2)
+            labels = distances.argmin(1)
+            new_centers = np.array([
+                data[labels == cluster].mean(0)
+                if np.any(labels == cluster) else centers[cluster]
+                for cluster in range(n_clusters)
+            ])
+            if np.allclose(new_centers, centers):
                 break
-    return merged
+            centers = new_centers
+        sse = float(((data - centers[labels]) ** 2).sum())
+        best_sse = min(best_sse, sse)
+    return best_sse
 
-def compute_velocity_thresholds(v):
-    if len(v) == 0:
-        return 0.01, 0.05
-    return float(np.percentile(v, 50)), float(np.percentile(v, 85))
 
-def velocity_threshold_fallback(v_seg, thr_lo, thr_hi):
-    res = np.zeros(len(v_seg), dtype=int)
-    res[v_seg > thr_hi] = 2
-    res[(v_seg > thr_lo) & (v_seg <= thr_hi)] = 1
+def choose_k(data, cfg, requested_k=None):
+    if requested_k is not None:
+        if requested_k < 1 or requested_k > len(data):
+            return min(max(1, requested_k), len(data))
+        return requested_k
+
+    max_k = min(cfg["k_max"], len(data))
+    ks = np.arange(1, max_k + 1)
+    if len(ks) < 3:
+        return int(ks[-1])
+
+    rng = np.random.default_rng(cfg["seed"])
+    sse = np.array([
+        kmeans_sse(
+            data,
+            int(k),
+            cfg["kmeans_max_iter"],
+            cfg["kmeans_restarts"],
+            rng,
+        )
+        for k in ks
+    ])
+    x = (ks - ks.min()) / (ks.max() - ks.min() + 1e-12)
+    y = (sse - sse.min()) / (sse.max() - sse.min() + 1e-12)
+    distance = np.abs((y[-1] - y[0]) * x - (x[-1] - x[0]) * y
+                      + x[-1] * y[0] - y[-1] * x[0])
+    return int(ks[int(distance.argmax())])
+
+
+def fit_gmmhmm(data, n_states, cfg, seed):
+    """Thử nhiều restart để fit GMMHMM."""
+    mix_values = list(dict.fromkeys((cfg["n_mix"], 1)))
+    for n_mix in mix_values:
+        best_model = None
+        best_score = -np.inf
+        for restart in range(cfg["n_restarts"]):
+            try:
+                model = GMMHMM(
+                    n_components=n_states,
+                    n_mix=n_mix,
+                    covariance_type=cfg["covariance_type"],
+                    n_iter=cfg["n_iter"],
+                    tol=cfg["tol"],
+                    min_covar=1e-3,
+                    random_state=seed + restart,
+                    verbose=False,
+                )
+                with warnings.catch_warnings():
+                    warnings.simplefilter('ignore')
+                    model.fit(data)
+                    score = float(model.score(data))
+                if np.isfinite(score) and score > best_score:
+                    best_model, best_score = model, score
+            except (ValueError, np.linalg.LinAlgError, FloatingPointError):
+                continue
+        if best_model is not None:
+            return best_model
+    return None
+
+
+def velocity_mapping(stats, cfg):
+    """Tạo mapping state cục bộ -> lớp vận tốc từ toàn bộ section."""
+    velocities = np.log10(np.maximum(np.asarray(stats)[:, 2], 0) + 1e-6)
+    if len(velocities) >= 3:
+        model = KMeans(
+            n_clusters=3,
+            n_init=10,
+            random_state=cfg["seed"],
+        ).fit(velocities.reshape(-1, 1))
+        order = np.argsort(model.cluster_centers_.ravel())
+        cluster_to_class = {
+            int(cluster): rank for rank, cluster in enumerate(order)
+        }
+        return {
+            (int(section), int(state)): cluster_to_class[int(cluster)]
+            for (section, state, _), cluster in zip(stats, model.labels_)
+        }, model.cluster_centers_.ravel()[order]
+
+    # Không đủ state để chạy K-Means 3 cụm: xếp trực tiếp theo vận tốc.
+    order = np.argsort(velocities)
+    return {
+        (int(stats[index][0]), int(stats[index][1])): min(rank, 2)
+        for rank, index in enumerate(order)
+    }, velocities[order]
+
+
+def velocity_threshold_fallback(velocities):
+    if len(velocities) == 0:
+        return np.array([], dtype=int)
+    thr_lo = float(np.percentile(velocities, 50))
+    thr_hi = float(np.percentile(velocities, 85))
+    res = np.zeros(len(velocities), dtype=int)
+    res[velocities > thr_hi] = 2
+    res[(velocities > thr_lo) & (velocities <= thr_hi)] = 1
     return res
 
-def smooth_labels(labels, window=3):
-    n = len(labels)
-    if n < window:
-        return labels
-    smoothed = labels.copy()
-    half = window // 2
-    for i in range(half, n - half):
-        w = labels[i - half:i + half + 1]
-        vals, counts = np.unique(w, return_counts=True)
-        smoothed[i] = vals[np.argmax(counts)]
-    return smoothed
 
-# --- 4 CAY CHOT CAI TIEN CUA HIERARCHICAL GMM-HMM ---
+def classify_sequence_gmmhmm_full(features, cfg=None, requested_k=None):
+    if cfg is None:
+        cfg = CFG.copy()
 
-def zscore_xyv(features):
-    """Chuan hoa (x, y, log_v) ve cung thang do truoc khi dua vao layer 1."""
-    x, y, v = features[:, 0], features[:, 1], features[:, 2]
-    log_v = np.log(v + LOG_EPS4)
-    stacked = np.column_stack([x, y, log_v])
-    mu  = stacked.mean(axis=0)
-    std = stacked.std(axis=0)
-    std[std < 1e-8] = 1.0
-    return (stacked - mu) / std
-
-def make_2d_features(velocity):
-    """[log_velocity, log_acceleration] - 2D feature da chung minh tach
-    Fixation/Smooth Pursuit tot hon 1D log_v rat nhieu (48.77% -> 83.92%
-    o thi nghiem truoc). Ap dung lai cho tang 2 cua hierarchical model."""
-    accel = np.abs(np.concatenate([[0], np.diff(velocity)]))
-    log_v = np.log(velocity + LOG_EPS4)
-    log_a = np.log(accel + LOG_EPS4)
-    return np.column_stack([log_v, log_a])
-
-def kmeans_init_means_layer2(feats2d_pool, n_mix):
-    """KMeans tren 2D feature [log_v, log_accel] de lay diem khoi tao on
-    dinh cho 3 state x n_mix component, thay vi random init."""
-    n_clusters = 3 * n_mix
-    if len(feats2d_pool) < n_clusters:
-        repeat_factor = int(np.ceil(n_clusters / max(1, len(feats2d_pool))))
-        feats2d_pool = np.tile(feats2d_pool, (repeat_factor, 1))[:n_clusters]
-    km = _KMeans(n_clusters=n_clusters, n_init=20, random_state=RANDOM_STATE)
-    km.fit(feats2d_pool)
-    order = np.argsort(km.cluster_centers_[:, 0])   # sap theo log_v (cot 0)
-    centers = km.cluster_centers_[order]
-    return centers.reshape(3, n_mix, 2)             # (n_components, n_mix, 2)
-
-def fit_layer1_gmmhmm(features, k, n_iter=200, random_state=RANDOM_STATE):
-    """Layer 1: GMM-HMM tren (x, y, log_v) DA CHUAN HOA, n_components=k.
-    n_mix=1 de giam tham so, covariance diag de giam nguy co suy bien."""
-    feats_norm = zscore_xyv(features)
-    model = GMMHMM(
-        n_components=k, n_mix=1, covariance_type=LAYER1_COV_TYPE,
-        n_iter=n_iter, tol=1e-4, random_state=random_state,
-        min_covar=1e-3,
-    )
-    with warnings.catch_warnings():
-        warnings.simplefilter('ignore')
-        model.fit(feats_norm)
-        _, states = model.decode(feats_norm, algorithm='viterbi')
-    return model, states
-
-def build_participant_layer2_model(participant_velocities, n_mix=N_MIX_LAYER2_FULL,
-                                    n_iter=300, random_state=RANDOM_STATE):
-    """Fit MOT LAN tren TOAN BO velocity CUA CHINH 1 PARTICIPANT (KHONG pool
-    cheo qua nguoi khac), dung feature 2D [log_v, log_accel] (khong phai
-    1D log_v nua - day la nguyen nhan chinh gay tran ~55-60% o ban truoc,
-    vi 1D khong tach duoc Fixation/Smooth Pursuit)."""
-    feats2d = make_2d_features(participant_velocities)
-    init_means = kmeans_init_means_layer2(feats2d, n_mix)
-    model = GMMHMM(
-        n_components=3, n_mix=n_mix, covariance_type='diag',
-        n_iter=n_iter, tol=1e-4, random_state=random_state,
-        min_covar=1e-4,
-        init_params='stwc',   # KHONG init 'm' (means) vi minh tu dat ben duoi
-    )
-    model.means_ = init_means
-    with warnings.catch_warnings():
-        warnings.simplefilter('ignore')
-        model.fit(feats2d)
-    return model
-
-def refit_layer2_local(v_cluster, base_model, n_mix, n_iter=50, random_state=RANDOM_STATE):
-    """Refit NHE (it iteration) rieng cho 1 sub-path, xuat phat tu tham so
-    cua base_model (participant-base) thay vi random -> tranh suy bien khi
-    mau khong qua nho nhung cung khong du lon de tu hoc tu dau. Dung 2D
-    feature [log_v, log_accel] giong base_model."""
-    feats2d = make_2d_features(v_cluster)
-    model = GMMHMM(
-        n_components=3, n_mix=n_mix, covariance_type='diag',
-        n_iter=n_iter, tol=1e-3, random_state=random_state,
-        min_covar=1e-4, init_params='',   # KHONG random init gi ca
-    )
-    # Copy tham so tu base_model lam diem xuat phat.
-    if base_model.n_mix == n_mix:
-        model.startprob_ = base_model.startprob_.copy()
-        model.transmat_  = base_model.transmat_.copy()
-        model.means_     = base_model.means_.copy()
-        model.covars_    = base_model.covars_.copy()
-        model.weights_   = base_model.weights_.copy()
-    else:
-        model.startprob_ = base_model.startprob_.copy()
-        model.transmat_  = base_model.transmat_.copy()
-        model.means_     = base_model.means_[:, :n_mix, :].copy()
-        model.covars_    = base_model.covars_[:, :n_mix, ...].copy()
-        w = base_model.weights_[:, :n_mix].copy()
-        model.weights_   = w / w.sum(axis=1, keepdims=True)
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter('ignore')
-            model.fit(feats2d)
-        return model
-    except Exception:
-        return base_model   # refit loi -> dung tam base_model (khong refit)
-
-def decode_layer2(model, v_cluster):
-    feats2d = make_2d_features(v_cluster)
-    with warnings.catch_warnings():
-        warnings.simplefilter('ignore')
-        _, states = model.decode(feats2d, algorithm='viterbi')
-    # sap xep nhan theo trung binh log-velocity (cot 0) cua tung state,
-    # KHONG lay trung binh ca 2 cot vi log_accel co the lam sai thu tu
-    comp_means_v = np.array([model.means_[s][:, 0].mean() for s in range(3)])
-    order  = np.argsort(comp_means_v)
-    remap  = {old: new for new, old in enumerate(order)}
-    return np.array([remap[s] for s in states])
-
-def classify_sequence_hierarchical_v2(features, participant_layer2_model=None,
-                                       k_min=2, k_max=10, min_seg_len=MIN_SEG_LEN):
     n = len(features)
     if n == 0:
         return np.array([], dtype=int), {'k': 0, 'n_segments': 0}
 
-    velocities = features[:, 2]
-    thr_lo, thr_hi = compute_velocity_thresholds(velocities)
-
-    # Neu chua co participant_layer2_model, fit base model tren sequence hien tai
-    if participant_layer2_model is None:
-        if n >= 3:
-            try:
-                participant_layer2_model = build_participant_layer2_model(velocities, n_mix=N_MIX_LAYER2_FULL)
-            except Exception:
-                participant_layer2_model = None
-
-    if participant_layer2_model is None or n < min_seg_len:
-        return velocity_threshold_fallback(velocities, thr_lo, thr_hi), {'k': 1, 'n_segments': 1}
-
-    actual_k_max = min(k_max, max(2, n // 2))
-    actual_k_min = min(k_min, actual_k_max)
-
-    # Step 0: SSE va Elbow K
-    if actual_k_max > actual_k_min:
-        try:
-            kv, sv = compute_sse_curve(features, actual_k_min, actual_k_max)
-            k = choose_elbow_k(kv, sv)
-        except Exception:
-            k = 2
+    if isinstance(features, pd.DataFrame):
+        df = features[["x", "y", "v"]].copy()
     else:
-        k = actual_k_min
+        df = pd.DataFrame(features[:, :3], columns=["x", "y", "v"])
 
-    # Step 1: Coarse Segmentation - Fit Layer 1 GMM-HMM tren Z-Score (x, y, log_v)
+    velocity = df["v"].to_numpy()
+    if n < 3:
+        return velocity_threshold_fallback(velocity), {'k': 1, 'n_segments': 1}
+
     try:
-        _, cluster_states = fit_layer1_gmmhmm(features, k)
+        xy = df[["x", "y"]].to_numpy()
+        k = choose_k(xy, cfg, requested_k)
+        layer1_input = scale(df[["x", "y"]].to_numpy(), cfg["standardize"])
+        layer1 = fit_gmmhmm(layer1_input, k, cfg, cfg["seed"])
+
+        if layer1 is None:
+            return velocity_threshold_fallback(velocity), {'k': 1, 'n_segments': 1}
+
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            _, segment_states = layer1.decode(layer1_input, algorithm="viterbi")
+
+        local_states = np.full(n, -1, dtype=int)
+        stats = []
+        tiny_sections = []
+
+        for section in np.unique(segment_states):
+            indices = np.flatnonzero(segment_states == section)
+            if len(indices) < cfg["min_seg_len"]:
+                tiny_sections.append(indices)
+                continue
+
+            layer2_input = scale(
+                df.iloc[indices][["v"]].to_numpy(),
+                cfg["standardize"],
+            )
+            layer2 = fit_gmmhmm(
+                layer2_input,
+                3,
+                cfg,
+                cfg["seed"] + 100 + int(section),
+            )
+            if layer2 is None:
+                tiny_sections.append(indices)
+                continue
+
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')
+                _, states = layer2.decode(layer2_input, algorithm="viterbi")
+
+            local_states[indices] = states
+            for state in np.unique(states):
+                state_velocity = velocity[indices[states == state]]
+                stats.append((section, state, float(state_velocity.mean())))
+
+        if not stats:
+            return velocity_threshold_fallback(velocity), {'k': k, 'n_segments': len(tiny_sections)}
+
+        mapping, centers = velocity_mapping(stats, cfg)
+        prediction = np.full(n, -1, dtype=int)
+
+        for index in np.flatnonzero(local_states >= 0):
+            key = (int(segment_states[index]), int(local_states[index]))
+            if key in mapping:
+                prediction[index] = mapping[key]
+            else:
+                prediction[index] = 0
+
+        # Section ngắn/fail dùng tâm velocity global
+        for indices in tiny_sections:
+            if len(centers) > 0:
+                distances = np.abs(
+                    np.log10(np.maximum(velocity[indices], 0) + 1e-6)[:, None]
+                    - centers[None, :]
+                )
+                prediction[indices] = distances.argmin(1).clip(max=2)
+            else:
+                prediction[indices] = velocity_threshold_fallback(velocity[indices])
+
+        if np.any(prediction < 0):
+            unassigned = np.flatnonzero(prediction < 0)
+            prediction[unassigned] = velocity_threshold_fallback(velocity[unassigned])
+
+        return prediction, {'k': k, 'n_segments': len(np.unique(segment_states))}
     except Exception:
-        cluster_states = np.zeros(n, dtype=int)
-        k = 1
+        return velocity_threshold_fallback(velocity), {'k': 1, 'n_segments': 1}
 
-    # QUAN TRONG: chuyen nhan-theo-tung-diem (cluster_states) thanh cac
-    # SUB-PATH LIEN TUC theo thoi gian (runs_from_states + merge_short_runs).
-    # KHONG duoc dung np.where(cluster_states==c) roi gop tat ca cac diem cung nhan
-    runs = runs_from_states(cluster_states)
-    sub_path_ranges = merge_short_runs(runs, min_seg_len)
-    sub_path_ranges = [(s, e) for s, e, _ in sub_path_ranges]
 
-    # Step 2 - moi SUB-PATH LIEN TUC: qua nho -> dung thang participant-base model;
-    # du lon -> refit nhe xuat phat tu chinh participant-base model do.
-    pred = np.zeros(n, dtype=int)
-    for start, end in sub_path_ranges:
-        v_c = velocities[start:end]
-        if len(v_c) == 0:
-            continue
-        if len(v_c) < MIN_REFIT_SAMPLES:
-            model_c = participant_layer2_model
-        else:
-            n_mix_c = (N_MIX_LAYER2_FULL if len(v_c) >= MIN_MIX_SAMPLES
-                       else N_MIX_LAYER2_SMALL)
-            model_c = refit_layer2_local(v_c, participant_layer2_model, n_mix_c)
-        try:
-            pred[start:end] = decode_layer2(model_c, v_c)
-        except Exception:
-            v_thr_lo, v_thr_hi = compute_velocity_thresholds(v_c)
-            pred[start:end] = velocity_threshold_fallback(v_c, v_thr_lo, v_thr_hi)
+# Compatibility aliases
+classify_sequence = classify_sequence_gmmhmm_full
+classify_sequence_hierarchical_v2 = classify_sequence_gmmhmm_full
 
-    # Step 3: Lam muot nhan
-    pred = smooth_labels(pred, window=3)
-    return pred, {'k': k, 'n_segments': len(sub_path_ranges)}
 
-# Compatibility alias
-classify_sequence = classify_sequence_hierarchical_v2
+def build_participant_layer2_model(participant_velocities, n_mix=N_MIX, n_iter=50, random_state=RANDOM_STATE):
+    """Hàm tương thích hỗ trợ tạo/huấn luyện model cho participant."""
+    v_input = scale(participant_velocities.reshape(-1, 1), STANDARDIZE)
+    cfg = CFG.copy()
+    cfg["n_mix"] = n_mix
+    return fit_gmmhmm(v_input, 3, cfg, random_state)
+
 
 class NotebookClassifier:
-    def __init__(self, k_max=10, min_seg_len=15, n_mix=N_MIX_LAYER2_FULL):
-        self.k_max = k_max
-        self.min_seg_len = min_seg_len
-        self.n_mix = n_mix
+    def __init__(self, k_max=9, min_seg_len=MIN_SEG_LEN, n_mix=N_MIX, covariance_type=COVARIANCE_TYPE, standardize=STANDARDIZE):
+        self.cfg = CFG.copy()
+        self.cfg["k_max"] = k_max
+        self.cfg["min_seg_len"] = min_seg_len
+        self.cfg["n_mix"] = n_mix
+        self.cfg["covariance_type"] = covariance_type
+        self.cfg["standardize"] = standardize
         self.base_model = None
 
     def fit_base_model(self, velocities):
-        """Fit participant-base model tren toan bo chuoi van toc."""
         if len(velocities) >= 3:
-            self.base_model = build_participant_layer2_model(velocities, n_mix=self.n_mix)
+            self.base_model = build_participant_layer2_model(velocities, n_mix=self.cfg["n_mix"])
         return self.base_model
 
     def fit_predict(self, x_arr, y_arr, v_arr, base_model=None):
         features = np.column_stack((x_arr, y_arr, v_arr))
-        model_to_use = base_model if base_model is not None else self.base_model
-        pred, _ = classify_sequence_hierarchical_v2(
-            features,
-            participant_layer2_model=model_to_use,
-            k_min=2,
-            k_max=self.k_max,
-            min_seg_len=self.min_seg_len
-        )
+        pred, _ = classify_sequence_gmmhmm_full(features, cfg=self.cfg)
         return pred
+
