@@ -1,7 +1,7 @@
 import socketio
 import uvicorn
 import collections
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from classifier_service import EyeMovementClassifierService
 
@@ -101,6 +101,22 @@ classifier_service = EyeMovementClassifierService(window_size=WINDOW_SIZE)
 @app.get("/")
 def read_root():
     return {"status": "ok", "message": "Midas Touch 3D Backend is running"}
+
+@app.post("/api/model/save/{sid}")
+def save_model(sid: str):
+    success = classifier_service.save_participant_model(sid)
+    if success:
+        return {"status": "ok", "message": "Model saved successfully"}
+    else:
+        raise HTTPException(status_code=404, detail="Model not found for this session")
+
+@app.post("/api/model/load/{sid}")
+def load_model(sid: str):
+    success = classifier_service.load_participant_model(sid)
+    if success:
+        return {"status": "ok", "message": "Model loaded successfully"}
+    else:
+        raise HTTPException(status_code=404, detail="Saved model not found or failed to load")
 
 @sio.event
 async def connect(sid, environ):

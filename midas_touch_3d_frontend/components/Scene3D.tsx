@@ -65,7 +65,7 @@ const TargetObjects = () => {
 const GazeController = () => {
   const { camera, scene, pointer } = useThree();
   const socketRef = useRef<Socket | null>(null);
-  const { setGazeData, setConnected, targets, setHoverTarget, updateTargetGraspProgress, label } = useGazeStore();
+  const { setGazeData, setConnected, targets, setHoverTarget, updateTargetGraspProgress, label, setSocketId } = useGazeStore();
   
   const raycaster = new THREE.Raycaster();
   const lastPosRef = useRef<{ x: number; y: number; time: number } | null>(null);
@@ -82,8 +82,14 @@ const GazeController = () => {
     });
     socketRef.current = socket;
 
-    socket.on('connect', () => setConnected(true));
-    socket.on('disconnect', () => setConnected(false));
+    socket.on('connect', () => {
+      setConnected(true);
+      setSocketId(socket.id || null);
+    });
+    socket.on('disconnect', () => {
+      setConnected(false);
+      setSocketId(null);
+    });
     socket.on('gaze_result', (data) => {
       setGazeData(data.x, data.y, data.v, data.label, data.label_name);
     });

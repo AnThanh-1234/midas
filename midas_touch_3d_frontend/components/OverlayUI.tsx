@@ -2,10 +2,32 @@
 
 import React from 'react';
 import { useGazeStore } from '../store/useGazeStore';
-import { Activity, ShieldCheck, ShieldAlert, Cpu, Eye, Zap } from 'lucide-react';
+import { Activity, ShieldCheck, ShieldAlert, Cpu, Eye, Zap, Save, Download } from 'lucide-react';
 
 export const OverlayUI: React.FC = () => {
-  const { x, y, velocity, label, labelName, isConnected, graspedTargetId, targets, resetAllTargets, isWebcamMode, setWebcamMode, screenGaze, isGazeCloudLoaded } = useGazeStore();
+  const { x, y, velocity, label, labelName, isConnected, graspedTargetId, targets, resetAllTargets, isWebcamMode, setWebcamMode, screenGaze, isGazeCloudLoaded, socketId } = useGazeStore();
+
+  const handleSaveModel = async () => {
+    if (!socketId) return alert('Chưa kết nối đến server!');
+    try {
+      const res = await fetch(`http://127.0.0.1:8001/api/model/save/${socketId}`, { method: 'POST' });
+      if (res.ok) alert('Đã lưu mô hình thành công!');
+      else alert('Lỗi: Không tìm thấy mô hình của bạn để lưu.');
+    } catch (e) {
+      alert('Lỗi kết nối đến server!');
+    }
+  };
+
+  const handleLoadModel = async () => {
+    if (!socketId) return alert('Chưa kết nối đến server!');
+    try {
+      const res = await fetch(`http://127.0.0.1:8001/api/model/load/${socketId}`, { method: 'POST' });
+      if (res.ok) alert('Đã tải mô hình cũ thành công!');
+      else alert('Lỗi: Không tìm thấy file mô hình cũ.');
+    } catch (e) {
+      alert('Lỗi kết nối đến server!');
+    }
+  };
 
   const getLabelBadge = () => {
     switch (label) {
@@ -38,7 +60,26 @@ export const OverlayUI: React.FC = () => {
   return (
     <div className="absolute inset-0 pointer-events-none flex flex-col justify-between p-6 z-50">
       {/* Top Header */}
-      <div className="flex justify-end items-start w-full">
+      <div className="flex justify-between items-start w-full">
+
+        {/* AI Settings Left Panel */}
+        <div className="bg-slate-900/80 backdrop-blur-md border border-slate-700/50 p-4 rounded-2xl shadow-xl flex flex-col gap-3 pointer-events-auto">
+          <div className="text-sm font-bold text-slate-200 mb-1 flex items-center gap-2">
+            <Cpu className="w-4 h-4 text-purple-400" /> AI Model
+          </div>
+          <button 
+            onClick={handleSaveModel}
+            className="flex items-center gap-2 text-xs bg-slate-800 hover:bg-slate-700 text-white px-3 py-2 rounded-lg border border-slate-600 transition-colors w-full"
+          >
+            <Save className="w-4 h-4 text-emerald-400" /> Lưu Mô Hình Hiện Tại
+          </button>
+          <button 
+            onClick={handleLoadModel}
+            className="flex items-center gap-2 text-xs bg-slate-800 hover:bg-slate-700 text-white px-3 py-2 rounded-lg border border-slate-600 transition-colors w-full"
+          >
+            <Download className="w-4 h-4 text-sky-400" /> Tải Lại Mô Hình Cũ
+          </button>
+        </div>
 
         {/* Realtime Metrics */}
         <div className="bg-slate-900/80 backdrop-blur-md border border-slate-700/50 p-4 rounded-2xl shadow-xl flex flex-col gap-3 min-w-[250px] pointer-events-auto">

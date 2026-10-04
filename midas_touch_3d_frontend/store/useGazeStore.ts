@@ -25,6 +25,7 @@ export interface GazeState {
   isCalibrated: boolean;
   isGazeCloudLoaded: boolean;
   robotPosition: [number, number, number]; // target position for robot arm
+  socketId: string | null;
   
   setGazeData: (x: number, y: number, velocity: number, label: number, labelName: string) => void;
   setConnected: (connected: boolean) => void;
@@ -35,6 +36,7 @@ export interface GazeState {
   setHoverTarget: (id: string | null) => void;
   updateTargetGraspProgress: (id: string, progress: number, isGrasped: boolean) => void;
   resetAllTargets: () => void;
+  setSocketId: (id: string | null) => void;
 }
 
 export const useGazeStore = create<GazeState>((set) => ({
@@ -56,6 +58,7 @@ export const useGazeStore = create<GazeState>((set) => ({
   ],
   activeHoverTargetId: null,
   graspedTargetId: null,
+  socketId: null,
   
   setGazeData: (x, y, velocity, label, labelName) => set({ x, y, velocity, label, labelName }),
   setConnected: (connected) => set({ isConnected: connected }),
@@ -84,5 +87,6 @@ export const useGazeStore = create<GazeState>((set) => ({
       targets: state.targets.map((t) => ({ ...t, isGrasped: false, graspProgress: 0 })),
       graspedTargetId: null,
       robotPosition: [2, 2.5, -3],
-    }))
+    })),
+  setSocketId: (id) => set({ socketId: id })
 }));

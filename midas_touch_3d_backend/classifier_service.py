@@ -1,6 +1,7 @@
 import sys
 import os
 import numpy as np
+import pickle
 
 from notebook_classifier import (
     NotebookClassifier,
@@ -25,6 +26,30 @@ class EyeMovementClassifierService:
         except Exception as e:
             print(f"[Init Participant Base Model Error ({sid})]: {e}")
         return None
+
+    def save_participant_model(self, sid: str, filepath: str = "saved_eye_model.pkl"):
+        """Lưu mô hình của participant ra file."""
+        model = self.participant_models.get(sid)
+        if model is not None:
+            try:
+                with open(filepath, 'wb') as f:
+                    pickle.dump(model, f)
+                return True
+            except Exception as e:
+                print(f"[Save Model Error]: {e}")
+        return False
+
+    def load_participant_model(self, sid: str, filepath: str = "saved_eye_model.pkl"):
+        """Tải mô hình của participant từ file."""
+        if os.path.exists(filepath):
+            try:
+                with open(filepath, 'rb') as f:
+                    model = pickle.load(f)
+                self.participant_models[sid] = model
+                return True
+            except Exception as e:
+                print(f"[Load Model Error]: {e}")
+        return False
 
     def cleanup_participant(self, sid: str):
         """Giải phóng mô hình khi client ngắt kết nối."""
