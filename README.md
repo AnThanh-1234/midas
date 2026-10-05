@@ -1,145 +1,218 @@
-# MIDAS: 3D Interactive Surgical Training System
+# MIDAS Touch 3D
 
-A comprehensive platform for immersive surgical education and advanced clinical simulation. MIDAS bridges the gap between theory and practice through high-fidelity 3D visualization, AI-powered guidance, and real-time performance analytics.
+MIDAS Touch 3D là hệ thống mô phỏng huấn luyện phẫu thuật tương tác bằng ánh nhìn. Frontend hiển thị scene 3D và gửi dữ liệu gaze; backend nhận dữ liệu thời gian thực, phân loại chuyển động mắt bằng GMM-HMM, làm mượt tọa độ và trả kết quả về frontend.
 
-## 🚀 Features
+## Tính năng
 
-### 👁️ 3D Visualization & Interaction
-- **Real-time 3D Anatomy**: Explore detailed anatomical models with complete musculoskeletal and soft tissue layers
-- **Interactive Cutting & Drilling**: Experience realistic haptic-feedback-enabled surgery simulation
-- **Multi-modal Visualization**: Switch seamlessly between 3D, 2D, and cross-sectional views
+- Hiển thị và tương tác scene 3D bằng Next.js, React Three Fiber và Three.js.
+- Nhận gaze data qua Socket.IO/WebSocket.
+- Phân loại ba trạng thái:
+  - `0`: Fixation
+  - `1`: Smooth Pursuit
+  - `2`: Saccade
+- GMM-HMM phân cấp: tầng 1 phân đoạn `(x, y)`, tầng 2 phân loại vận tốc `v`.
+- Fallback theo ngưỡng vận tốc khi chưa có model participant.
+- Làm mượt tọa độ theo nhãn và debounce trạng thái.
+- Huấn luyện, lưu và tải model riêng cho từng session/participant.
 
-### 🤖 AI-Powered Surgical Assistant
-- **Smart Instrument Recommendation**: AI suggests the optimal surgical tool for each step
-- **Context-Aware Guidance**: Intelligent hints and procedural assistance tailored to the surgeon's progress
-- **Real-time Error Detection**: Automated identification of incorrect techniques or tool usage
+## Cấu trúc project
 
-### 📊 Performance Analytics
-- **Skill Assessment**: Quantitative evaluation of surgical precision, speed, and control
-- **Procedural Scoring**: Track completion time, accuracy metrics, and procedural adherence
-- **Comprehensive Reporting**: Detailed analytics for continuous improvement
+```text
+midas/
+├── midas_touch_3d_frontend/       # Next.js + React + Three.js
+│   ├── app/
+│   ├── components/
+│   ├── store/
+│   └── package.json
+├── midas_touch_3d_backend/        # FastAPI + Socket.IO + GMM-HMM
+│   ├── main.py
+│   ├── classifier_service.py
+│   ├── notebook_classifier.py
+│   ├── gaze_filter.py
+│   └── requirements.txt
+├── Cac_Httm/                     # Mã nghiên cứu và thử nghiệm GMM-HMM
+├── *.ipynb                       # Notebook huấn luyện/đánh giá
+├── *.py                          # Script xử lý eye movement
+└── *.pdf                         # Tài liệu và paper tham khảo
+```
 
-### 🔄 Full Surgical Workflow Support
-1. **Pre-op Planning**: Review patient data and surgical approach
-2. **Intra-op Execution**: Perform surgery with real-time AI guidance
-3. **Post-op Review**: Analyze performance and identify areas for improvement
+Xem hướng dẫn riêng cho phần GMM-HMM tại [Cac_Httm/README.md](./Cac_Httm/README.md).
 
-## 🛠️ Technology Stack
+## Yêu cầu
 
-### Frontend
-- **Next.js**: React framework for server-side rendering and optimized performance
-- **TypeScript**: Type safety and improved developer experience
-- **Three.js/React Three Fiber**: High-performance 3D graphics and WebGL
-- **Zustand**: Lightweight state management
-- **Tailwind CSS**: Utility-first CSS framework
+- Node.js 18 trở lên.
+- Python 3.10 trở lên.
+- npm.
+- Webcam hoặc thiết bị eye tracking tương thích.
+
+Project chạy local không bắt buộc PostgreSQL, Redis hoặc Docker. Backend hiện lưu trạng thái client trong bộ nhớ và lưu model participant ra file khi được yêu cầu.
+
+## Cài đặt
 
 ### Backend
-- **FastAPI (Python)**: High-performance web framework for AI integration
-- **PyTorch/TensorFlow**: Machine learning model deployment
-- **PostgreSQL**: Database for user management and performance tracking
-- **Redis**: Caching and session management
 
-## 📂 Project Structure
-
-```
-midas/
-├── midas_touch_3d_frontend/  # Next.js frontend application
-│   ├── app/                   # Next.js pages and routes
-│   ├── components/            # Reusable React components
-│   ├── store/                 # State management modules
-│   └── lib/                   # Utility functions and helpers
-└── midas_touch_3d_backend/    # FastAPI backend services
-    ├── app/                   # FastAPI application
-    ├── database/              # Database models and migrations
-    ├── services/              # Business logic and AI integrations
-    └── main.py                # Application entry point
-```
-
-## 🚀 Getting Started
-
-### Prerequisites
-- **Node.js** 18+
-- **Python** 3.9+
-- **PostgreSQL** 14+
-- **Redis** 7+
-- **Git**
-
-### Installation
-
-1. **Clone the repository**
-```bash
-git clone <repository-url>
-cd midas
-```
-
-2. **Backend Setup**
-```bash
+```powershell
 cd midas_touch_3d_backend
-pip install -r requirements.txt
-# Configure database in .env file
-python -m uvicorn main:socket_app --reload --port 8001
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 ```
 
-3. **Frontend Setup**
-```bash
+### Frontend
+
+Mở terminal khác:
+
+```powershell
 cd midas_touch_3d_frontend
 npm install
+```
+
+## Chạy ứng dụng
+
+### Backend
+
+Từ `midas_touch_3d_backend/`:
+
+```powershell
+python -m uvicorn main:socket_app --reload --host 127.0.0.1 --port 8001
+```
+
+Kiểm tra:
+
+```text
+http://127.0.0.1:8001/
+```
+
+Kết quả mong đợi:
+
+```json
+{"status":"ok","message":"Midas Touch 3D Backend is running"}
+```
+
+### Frontend
+
+Từ `midas_touch_3d_frontend/`:
+
+```powershell
 npm run dev
 ```
 
-4. **Access the Application**
-- **Frontend**: http://localhost:3000
-- **Backend API**: http://localhost:8000
+Mở `http://localhost:3000`.
 
-## 🏃 Quick Start
+Frontend mặc định kết nối tới `http://127.0.0.1:8001`. Có thể thay đổi:
 
-**Option 1: Using Docker Compose**
-```bash
-cd midas
-docker-compose up --build
+```powershell
+$env:NEXT_PUBLIC_SOCKET_URL = "http://127.0.0.1:8001"
+npm run dev
 ```
 
-**Option 2: Separate Docker Containers**
-```bash
-# Start backend container
-docker run -p 8000:8000 --name midas_backend midas-backend
+## API backend
 
-# Start frontend container
-docker run -p 3000:3000 --name midas_frontend midas-frontend
+```text
+GET  /
+POST /api/model/save/{sid}
+POST /api/model/load/{sid}
 ```
 
-## 🚀 Usage
+Model mặc định được lưu/tải từ `saved_eye_model.pkl` theo working directory của backend.
 
-### Login
-- **Username**: [EMAIL_ADDRESS]`
-- **Password**: [PASSWORD]
+## Socket.IO events
 
-### Modules
-1. **Pre-op**: Review patient data and surgical procedures
-2. **Intra-op**: Perform simulated surgeries with AI guidance
-3. **Post-op**: Analyze performance and receive detailed feedback
+### Client gửi `gaze_data`
 
-## 🌐 Live Demo
+```json
+{
+  "x": 0.5,
+  "y": 0.5,
+  "v": 0.02,
+  "nx": 0.1,
+  "ny": -0.2,
+  "timestamp": 1710000000000
+}
+```
 
-**Frontend**: [https://midas-3d-frontend.vercel.app](https://midas-3d-frontend.vercel.app)
-**Backend**: [https://midas-3d-backend.vercel.app](https://midas-3d-backend.vercel.app)
+### Backend trả `gaze_result`
 
-*(Note: Production deployment may be subject to rate limits and usage restrictions)*
+```json
+{
+  "x": 0.5,
+  "y": 0.5,
+  "raw_x": 0.5,
+  "raw_y": 0.5,
+  "v": 0.02,
+  "label": 1,
+  "label_name": "Smooth Pursuit",
+  "sx": 0.1,
+  "sy": -0.2,
+  "buffer_size": 30
+}
+```
 
-## 📝 License
+## Pipeline GMM-HMM
 
-Private project - All rights reserved
+1. Frontend gửi tọa độ và vận tốc.
+2. Backend giữ cửa sổ tối đa 30 mẫu.
+3. Khi chưa có model participant, backend dùng fallback theo `v`.
+4. Sau khoảng 600 mẫu, backend khởi tạo model participant.
+5. `NotebookClassifier` chạy GMM-HMM phân cấp.
+6. Nhãn được debounce để giảm nhiễu.
+7. Tọa độ được làm mượt theo nhãn.
+8. Backend trả dữ liệu đã xử lý về frontend.
 
-## 👥 Contributing
+Ngưỡng fallback hiện tại:
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+| Vận tốc | Nhãn |
+|---:|---|
+| `v <= 0.01` | Fixation |
+| `0.01 < v <= 0.05` | Smooth Pursuit |
+| `v > 0.05` | Saccade |
 
-## 📧 Contact
+## Chạy mã trong `Cac_Httm`
 
-For questions or support, please contact:
-- **Email**: [EMAIL_ADDRESS]`
-- **GitHub**: https://github.com/AnThanh-1234/midas
+```powershell
+cd Cac_Httm
+python -m pip install numpy pandas scipy scikit-learn hmmlearn matplotlib jupyter
+python GMM_HMM_layer1.py
+python GMM_HMM_full_layer.py
+```
 
----
+Mở notebook:
 
-**Made with ❤️ for the next generation of surgical training**
+```powershell
+jupyter notebook
+```
+
+Các file nghiên cứu chính:
+
+- `GMM_HMM_layer1.py`: Step 0 và GMM-HMM tầng 1.
+- `GMM_HMM_full_layer.py`: pipeline hai tầng.
+- `GMM_HMM_full_layer_eval.ipynb`: đánh giá pipeline.
+- `baseline_one_gmmhmm_overlap.ipynb`: baseline một GMM-HMM.
+
+Chi tiết tùy chọn command line và định dạng dữ liệu nằm trong [Cac_Httm/README.md](./Cac_Httm/README.md).
+
+## Build frontend
+
+```powershell
+cd midas_touch_3d_frontend
+npm run build
+npm run start
+```
+
+## Xử lý lỗi thường gặp
+
+- **Không kết nối backend:** kiểm tra port `8001` và `NEXT_PUBLIC_SOCKET_URL`.
+- **Chưa có model participant:** session mới sẽ dùng fallback và tự thu thập mẫu.
+- **GMM-HMM không hội tụ:** kiểm tra số mẫu, thử giảm `n_mix`, tăng `n_iter` hoặc dùng khởi tạo K-means.
+- **Notebook lỗi thư viện:** kích hoạt đúng virtual environment rồi cài các package trong phần Cài đặt.
+
+## Tài liệu
+
+- [Hướng dẫn tích hợp gaze filter](./midas_touch_3d_backend/GAZE_PATCH_GUIDE.md)
+- [README GMM-HMM](./Cac_Httm/README.md)
+- Các paper và notebook trong thư mục gốc.
+
+## License
+
+Project private phục vụ nghiên cứu và phát triển. Việc sử dụng, phân phối và triển khai cần tuân theo thỏa thuận của nhóm phát triển.
